@@ -1,55 +1,46 @@
 using CUDA
 
+struct str2D{T<:Real}
+    x::T
+    y::T
+end
+
+struct Simu_Param
+    dt::Float64
+    ρ::Float64
+    N::Int64
+    N1::Int64
+    L::Float64
+    σ_ratio::Float64
+    strength::Float64
+    T::Float64
+    γ::Float64
+    WCA_cutoff::Float64
+end
+
+function Simu_Param(dt,ρ,N,N1,σ_ratio,T,γ)
+    L = sqrt(N/ρ)
+    strength = sqrt(2.0 * γ * T * dt)
+    WCA_cutoff = 1.122462048309373
+    Simu_Param(dt,ρ,N,N1,L,σ_ratio,strength,T,γ,WCA_cutoff)
+end
+
+struct Grid_Param
+    cell_size::Float64
+    Grid_num::Int64
+    Max_particle_per_cell::Int64
+end
+
+struct Margin
+    MARGIN::Float64
+    margin_length::CuArray{Float64,1}
+end
+
+function Margin(MARGIN::Float64)
+    Margin(MARGIN,CUDA.zeros(Float64,1))
+end
 
 struct Config
     numthreads::Int64
     numblocks::Int64
-end
-
-struct systemParameters
-    N::Int64
-    ρ::Float64
-    L::Float64
-    T::Float64
-    γ::Float64
-    σ_ratio::Float64
-end
-
-function systemParameters(
-    N::Int64,
-    ρ::Float64,
-    T::Float64,
-    γ::Float64,
-    σ_ratio::Float64
-)
-    L = sqrt(N/ρ)
-    systemParameters(N, ρ, L, T, γ,σ_ratio)
-end
-
-
-struct simulationParameters
-    dt::Float64
-    Tmax::Int64
-    Tsteps::Int64
-    outFreq::Float64
-end
-
-function simulationParameters(dt::Float64, Tmax::Int64, outFreq::Float64)
-    Tsteps = floor(Tmax / dt)
-    simulationParameters(dt, Tmax, Tsteps, outFreq)
-end
-
-
-mutable struct Brownian
-    N::Int64
-    r::CuArray{Float64,2}
-    v::CuArray{Float64,2}
-    rnd::CuArray{Float64,2}
-end
-
-function Brownian(Num::Int64,L::Float64)
-    r = L * CUDA.rand(Float64, 2, Num) #ランダム分布
-    v = CUDA.zeros(Float64, size(r)...) #速度は全て0
-    rnd = CuArray{Float64}(undef, size(r)...)
-    Brownian(Num, r, v,rnd)
 end

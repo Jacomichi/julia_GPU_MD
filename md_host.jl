@@ -2,46 +2,93 @@ using CUDA
 using Test, BenchmarkTools
 using Random: rand!,randn!
 
+include("md_kernel.jl")
+include("md_struct.jl")
+
+#-------------------------------------------------------------------------------
+#
+#                       Setting GPU
+#
+#
+#-------------------------------------------------------------------------------
+
+
 
 function ret_blocksize(N::Int64,numthreads::Int64)
     return ceil.(Int,N/numthreads)
 end
 
+#ここでthreadのサイズを2^8をmaxにしているのは、
+#今のコードだと、これ以上はレジスタを食い尽くして、止まってしまうため。
 function ret_threadsize(N::Int64)
-    if N <= 1024
+    if N <= 2^8
         return 2^(floor(Int,log(2,N)))
     else
-        return 1024
+        return 2^8
     end
 end
 
-function update_pos(pos::CuArray{Float64,2},velo::CuArray{Float64,2},dt::Float64)
-    pos = velo * dt
+
+
+#-------------------------------------------------------------------------------
+#
+#                       Initialization
+#
+#-------------------------------------------------------------------------------
+
+
+function initialize_System_Lattice(pos,velo,simu_para::Simu_Param,setting::Config)
+    cell_num = floor(sqrt(simu_para.N)) + 1
+    @cuda threads=setting.numthreads blocks=setting.numblocks initial_lattice(pos,cell_num,simu_para)
+    initialize_verlocity(velo)
 end
 
-function Langevin(
-    pos::CuArray{Float64,2},velo::CuArray{Float64,2},rnd::CuArray{Float64,2},
-    dt::Float64,γ::Float64,T::Float64
-)
-    noise_strength = 2.0 * γ * T / dt
-    velo .+= (γ .* velo .+ sqrt(noise_strength) * randn!(rnd)) .* simu_para.dt
+function initialize_System_random(pos,velo,rnd,simu_para::Simu_Param)
+    initial_random(pos,simu_para.L,rnd)
+    initialize_verlocity(velo)
 end
 
-function check_BC(pos::Float64, L::Float64)::Float64
-    pos = ifelse(pos < 0.0,L, pos)
-    pos = ifelse(pos > L,pos - L,pos)
-    return pos
-end
 
-function initial_lattice(pos,L,cell_num,N)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    (x,y) = (1,2)
-    if i <= N
-        pos[x, i] = (L - 6.0) * (floor((i - 1) / cell_num) / cell_num) + 3#縦方向
-        pos[y, i] = (L - 6.0) * (((i - 1) % cell_num) / cell_num) + 3#横方向
+#-------------------------------------------------------------------------------
+#
+#                       Simulation
+#
+#-------------------------------------------------------------------------------
+
+function check_grid(pos,velo,grid_counter,grid_cell,simu_para::Simu_Param,grid_para::Grid_Param,margin::Margin,setting::Config)
+    if !is_margin(velo,simu_para,margin)
+        update_grid(pos,grid_counter,grid_cell,grid_para,setting)
     end
     return nothing
 end
+
+function update_grid(pos,grid_counter,grid_cell,grid_para::Grid_Param,setting::Config)
+    grid_counter .= CUDA.zeros(Int64,length(grid_counter))
+    @cuda threads=setting.numthreads blocks=setting.numblocks update_grid(pos,grid_counter,grid_cell,grid_para)
+end
+
+function collide(pos,velo,force,rnd,grid_counter,grid_cells,simu_para::Simu_Param,grid_para::Grid_Param,setting::Config)
+    update_pos!(pos,velo,simu_para)
+    check_boundary!(pos,simu_para)
+    @cuda threads=setting.numthreads blocks=setting.numblocks update_force!(pos,force,grid_counter,grid_cells,simu_para,grid_para)
+    update_velocity!(velo,force,rnd,simu_para)
+end
+
+function calc_potential(pos,energy,simu_para::Simu_Param,grid_para::Grid_Param,setting::Config)
+    energy = CUDA.zeros(Float64,1)
+    @cuda threads=setting.numthreads blocks=setting.numblocks calc_potential_energy(pos,energy,simu_para,grid_para,numthreads,setting.numthreads)
+    return energy[1]
+end
+
+
+#function run_simulation(pos,velo,force,rnd,grid_counter,grid_cells,simu_para::Simu_Param,grid_para::Grid_Param,setting::Config)
+
+#-------------------------------------------------------------------------------
+#
+#                       Unitlity tools
+#
+#-------------------------------------------------------------------------------
+
 
 function print_lattice(arr,cellnum)
     count = 0
@@ -58,9 +105,4 @@ function print_lattice(arr,cellnum)
         end
     end
     println("")
-end
-
-function initialize_Lattice(pos,L,N,setting)
-    cell_num = floor(sqrt(N)) + 1
-    @cuda threads=setting.numthreads blocks=setting.numblocks initial_lattice(pos,L,cell_num,N)
 end
